@@ -24,6 +24,30 @@ const PERICIAS_MENTAIS = {
 };
 const MAPA_TOTAL = { ...PERICIAS_FISICAS, ...PERICIAS_MENTAIS };
 
+// --- MAPA DE APELIDOS PARA ATRIBUTOS ---
+const ALIAS_ATRIBUTOS = {
+    "forca": "forca", "força": "forca", "for": "forca",
+    "destreza": "destreza", "des": "destreza",
+    "constituicao": "constituicao", "constituição": "constituicao", "con": "constituicao", "cons": "constituicao",
+    "inteligencia": "inteligencia", "inteligência": "inteligencia", "int": "inteligencia",
+    "sabedoria": "sabedoria", "sab": "sabedoria",
+    "carisma": "carisma", "car": "carisma"
+};
+
+// --- FUNÇÃO AUXILIAR: CALCULAR TOTAL ---
+function calcularPericia(dados, nomePericia) {
+    const atributoChave = MAPA_TOTAL[nomePericia];
+    
+    const valorPontos = dados.pontosPericia?.[nomePericia] || 0; 
+    const modAtributo = dados.atributos[atributoChave] || 0;     
+    const bonusTreino = dados.periciasTreinadas.includes(nomePericia) ? 3 : 0; 
+
+    return {
+        total: valorPontos + modAtributo + bonusTreino,
+        detalhes: `${valorPontos} (Pts) + ${modAtributo} (${atributoChave.substr(0,3).toUpperCase()}) + ${bonusTreino} (Tr)`
+    };
+}
+
 // --- FUNÇÃO AUXILIAR: PROCESSAR PARÂMETROS (--) ---
 function processarEntrada(textoBruto) {
     if (!textoBruto.includes('--')) return { nome: textoBruto.trim(), params: {} };
@@ -37,16 +61,16 @@ function processarEntrada(textoBruto) {
     return { nome: partes[0].trim(), params };
 }
 
-// --- FUNÇÃO AUXILIAR: SINCRONIZAR (Salva a ficha ativa de volta no cofre) ---
+// --- FUNÇÃO AUXILIAR: SINCRONIZAR ---
 async function sincronizarFicha(userId) {
     const ativa = await db.get(`ficha_${userId}`);
     if (!ativa) return; 
 
-    let banco = await db.get(`banco_fichas_${userId}`) || [];
-    banco = banco.filter(f => f.nome !== ativa.nome); // Remove versão velha
-    banco.push(ativa); // Adiciona versão atualizada
-    
-    await db.set(`banco_fichas_${userId}`, banco);
+    // MUDANÇA: Agora sincroniza com o banco GERAL
+    let banco = await db.get(`banco_fichas_geral`) || [];
+    banco = banco.filter(f => f.nome !== ativa.nome); 
+    banco.push(ativa); 
+    await db.set(`banco_fichas_geral`, banco);
 }
 
 // --- 1. COMANDO PRINCIPAL (!ficha) ---
@@ -55,37 +79,38 @@ async function comandoFicha(message) {
     const opcao = args[1] ? args[1].toLowerCase() : 'basico';
     const inputUsuario = args.slice(2).join(' ');
     const userId = message.author.id;
-    const chaveAtiva = `ficha_${userId}`;
-    const chaveBanco = `banco_fichas_${userId}`;
+    
+    const chaveAtiva = `ficha_${userId}`; // A ficha que EU estou jogando (Pessoal)
+    const chaveBanco = `banco_fichas_geral`; // Onde as fichas ficam guardadas (Público)
 
     // --- COMANDO: ADD / CRIAR ---
     if (opcao === 'add' || opcao === 'criar') {
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('btn_abrir_form_add').setLabel('➕ Criar Nova Ficha').setStyle(ButtonStyle.Success)
         );
-        return message.reply({ content: 'Para adicionar um novo personagem ao seu banco de dados, clique abaixo:', components: [row] });
+        return message.reply({ content: 'Para adicionar um novo personagem ao Banco Público, clique abaixo:', components: [row] });
     }
 
     // --- COMANDO: LISTA ---
     if (opcao === 'lista' || opcao === 'listar') {
         const banco = await db.get(chaveBanco) || [];
-        if (banco.length === 0) return message.reply("📭 Seu banco de fichas está vazio. Use `!ficha add`.");
+        if (banco.length === 0) return message.reply("📭 O banco de fichas está vazio. Use `!ficha add`.");
         
         const nomes = banco.map(f => `• **${f.nome}** (Nvl ${f.nivel} ${f.racaClasse})`).join('\n');
         const ativa = await db.get(chaveAtiva);
-        return message.reply({ embeds: [new EmbedBuilder().setColor(0x0099FF).setTitle('📂 Seus Personagens').setDescription(nomes).setFooter({ text: `Atual: ${ativa ? ativa.nome : 'Nenhum'}` })] });
+        return message.reply({ embeds: [new EmbedBuilder().setColor(0x0099FF).setTitle('📂 Banco de Personagens (Público)').setDescription(nomes).setFooter({ text: `Jogando como: ${ativa ? ativa.nome : 'Ninguém'}` })] });
     }
 
-    // --- COMANDO: LOGIN (Agora com Dropdown) ---
+    // --- COMANDO: LOGIN ---
     if (opcao === 'login') {
         const banco = await db.get(chaveBanco) || [];
-        if (banco.length === 0) return message.reply("❌ Você não tem fichas salvas! Use `!ficha add` primeiro.");
+        if (banco.length === 0) return message.reply("❌ Não existem fichas salvas! Use `!ficha add` primeiro.");
 
         const select = new StringSelectMenuBuilder()
             .setCustomId('menu_login_ficha')
-            .setPlaceholder('Selecione o personagem para Logar...');
+            .setPlaceholder('Selecione o personagem...');
 
-        // Adiciona opções (Limite do Discord é 25)
+        // Limita a 25 para não quebrar o menu
         banco.slice(0, 25).forEach(f => {
             select.addOptions(new StringSelectMenuOptionBuilder()
                 .setLabel(f.nome)
@@ -95,23 +120,23 @@ async function comandoFicha(message) {
         });
 
         const row = new ActionRowBuilder().addComponents(select);
-        return message.reply({ content: '🔑 **Escolha quem você quer assumir hoje:**', components: [row] });
+        return message.reply({ content: '🔑 **Login Público (Qualquer um pode usar):**', components: [row] });
     }
 
-    // --- COMANDO: DEL (Agora com Dropdown) ---
+    // --- COMANDO: DEL ---
     if (opcao === 'del' || opcao === 'deletar') {
         const banco = await db.get(chaveBanco) || [];
         if (banco.length === 0) return message.reply("❌ Banco vazio.");
 
         const select = new StringSelectMenuBuilder()
             .setCustomId('menu_del_ficha')
-            .setPlaceholder('Selecione o personagem para EXCLUIR...')
+            .setPlaceholder('Selecione para EXCLUIR...')
             .addOptions(banco.slice(0, 25).map(f => 
                 new StringSelectMenuOptionBuilder().setLabel(f.nome).setValue(f.nome).setEmoji('🗑️')
             ));
 
         const row = new ActionRowBuilder().addComponents(select);
-        return message.reply({ content: '⚠️ **Cuidado! Selecione o personagem para DELETAR permanentemente:**', components: [row] });
+        return message.reply({ content: '⚠️ **Cuidado! Isso apagará a ficha do Banco Público:**', components: [row] });
     }
 
     // --- COMANDO: RESETAR ---
@@ -121,15 +146,47 @@ async function comandoFicha(message) {
         return message.reply("☢️ Reset total concluído.");
     }
 
-    // --- VERIFICAÇÃO DE SEGURANÇA (Se não tem ficha ativa) ---
+    // --- VERIFICAÇÃO DE SEGURANÇA ---
     const dados = await db.get(chaveAtiva);
-    if (!dados) return message.reply("❌ Nenhuma ficha logada! Use `!ficha add` para criar e `!ficha login` para entrar.");
+    if (!dados) return message.reply("❌ Nenhuma ficha logada! Use `!ficha login` para entrar em um personagem do banco.");
 
-    // Garante Arrays
+    // Garante Arrays e Objetos Novos
     if (!Array.isArray(dados.inventario)) dados.inventario = [];
     if (!Array.isArray(dados.habilidades)) dados.habilidades = [];
+    if (!dados.pontosPericia) dados.pontosPericia = {}; 
 
-    // --- ADIÇÃO DE ITEM/HABILIDADE ---
+    // --- COMANDO: DEFINIR VALOR DA PERÍCIA ---
+    if (opcao === 'pericia' || opcao === 'pontos') {
+        const valor = parseInt(args[args.length - 1]);
+        const nomeArgs = args.slice(2, args.length - 1).join(' '); 
+        const nomeReal = Object.keys(MAPA_TOTAL).find(k => k.toLowerCase() === nomeArgs.toLowerCase());
+
+        if (!nomeReal || isNaN(valor)) {
+            return message.reply("⚠️ Uso correto: `!ficha pericia [Nome] [Valor]`\nEx: `!ficha pericia Luta 2`");
+        }
+
+        dados.pontosPericia[nomeReal] = valor;
+        await db.set(chaveAtiva, dados);
+
+        const calc = calcularPericia(dados, nomeReal);
+        return message.reply(`✅ **${nomeReal}** atualizada!\nPontos: **${valor}** | Total na Rolagem: **${calc.total}**`);
+    }
+
+    // --- COMANDO: DEFINIR VALOR DE ATRIBUTO ---
+    if (opcao === 'atributo' || opcao === 'attr') {
+        const valor = parseInt(args[args.length - 1]);
+        const nomeInput = args.slice(2, args.length - 1).join(' ').toLowerCase();
+        const chaveAttr = ALIAS_ATRIBUTOS[nomeInput];
+
+        if (!chaveAttr || isNaN(valor)) {
+            return message.reply("⚠️ Uso correto: `!ficha atributo [Nome] [Valor]`\nEx: `!ficha atributo Força 3` ou `!ficha atributo Des 5`");
+        }
+        dados.atributos[chaveAttr] = valor;
+        await db.set(chaveAtiva, dados);
+        return message.reply(`💪 **${chaveAttr.toUpperCase()}** atualizado para **${fmt(valor)}**!`);
+    }
+
+    // --- ADIÇÃO DE ITEM ---
     if (opcao === 'item') {
         if (!inputUsuario) return message.reply("⚠️ Ex: `!ficha item Espada -- q 1`");
         const { nome, params } = processarEntrada(inputUsuario);
@@ -138,12 +195,31 @@ async function comandoFicha(message) {
         return message.reply(`🎒 **${nome}** adicionado!`);
     }
 
+    // --- ADIÇÃO: HABILIDADE (Tipo: Habilidade) ---
     if (opcao === 'habilidade') {
-        if (!inputUsuario) return message.reply("⚠️ Ex: `!ficha habilidade Bola de Fogo`");
+        if (!inputUsuario) return message.reply("⚠️ Ex: `!ficha habilidade Ataque Duplo -- c 2 MP`");
         const { nome, params } = processarEntrada(inputUsuario);
-        dados.habilidades.push({ nome, desc: params['d'] || "", custo: params['c'] || "" });
+        dados.habilidades.push({ nome, desc: params['d'] || "", custo: params['c'] || "", tipo: 'Habilidade' });
         await db.set(chaveAtiva, dados);
-        return message.reply(`✨ Habilidade **${nome}** aprendida!`);
+        return message.reply(`⚔️ Habilidade **${nome}** aprendida!`);
+    }
+
+    // --- ADIÇÃO: MAGIA (Tipo: Magia) ---
+    if (opcao === 'magia') {
+        if (!inputUsuario) return message.reply("⚠️ Ex: `!ficha magia Bola de Fogo -- c 5 MP`");
+        const { nome, params } = processarEntrada(inputUsuario);
+        dados.habilidades.push({ nome, desc: params['d'] || "", custo: params['c'] || "", tipo: 'Magia' });
+        await db.set(chaveAtiva, dados);
+        return message.reply(`🔮 Magia **${nome}** aprendida!`);
+    }
+
+    // --- ADIÇÃO: DEFEITO (Tipo: Defeito) ---
+    if (opcao === 'defeito') {
+        if (!inputUsuario) return message.reply("⚠️ Ex: `!ficha defeito Manco -- d -2 Deslocamento`");
+        const { nome, params } = processarEntrada(inputUsuario);
+        dados.habilidades.push({ nome, desc: params['d'] || "", custo: "", tipo: 'Defeito' });
+        await db.set(chaveAtiva, dados);
+        return message.reply(`🩸 Defeito **${nome}** adquirido.`);
     }
 
     // --- REMOÇÃO ---
@@ -157,11 +233,13 @@ async function comandoFicha(message) {
             await db.set(chaveAtiva, dados);
             return message.reply(`🗑️ Item **${alvo}** removido.`);
         }
-        if (cat === 'habilidade') {
+        
+        if (['habilidade', 'magia', 'defeito'].includes(cat)) {
             dados.habilidades = dados.habilidades.filter(h => h.nome.toLowerCase() !== alvo.toLowerCase());
             await db.set(chaveAtiva, dados);
-            return message.reply(`🗑️ Habilidade **${alvo}** removida.`);
+            return message.reply(`🗑️ ${cat.charAt(0).toUpperCase() + cat.slice(1)} **${alvo}** removido(a).`);
         }
+
         if (cat === 'treinar') {
             dados.periciasTreinadas = dados.periciasTreinadas.filter(p => p.toLowerCase() !== alvo.toLowerCase());
             await db.set(chaveAtiva, dados);
@@ -193,16 +271,17 @@ async function comandoFicha(message) {
             new ButtonBuilder().setCustomId('btn_treinar_fisicas').setLabel('Físicas').setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId('btn_treinar_mentais').setLabel('Mentais').setStyle(ButtonStyle.Primary)
         );
-        return message.reply({ content: 'Selecione a categoria:', components: [row] });
+        return message.reply({ content: 'Escolha a categoria para adicionar o bônus de Treinado (+3):', components: [row] });
     }
 
     // --- VISUALIZAR ---
+    const avatar = message.author.displayAvatarURL();
     switch (opcao) {
         case 'p': return message.reply({ embeds: [gerarEmbedPericias(dados)] });
         case 'i': return message.reply({ embeds: [gerarEmbedInventario(dados)] });
         case 'h': return message.reply({ embeds: [gerarEmbedHabilidades(dados)] });
-        case 'f': return message.reply({ embeds: [gerarEmbedBasico(dados), gerarEmbedPericias(dados), gerarEmbedInventario(dados), gerarEmbedHabilidades(dados)] });
-        default: return message.reply({ embeds: [gerarEmbedBasico(dados, message.author.displayAvatarURL())] });
+        case 'f': return message.reply({ embeds: [gerarEmbedBasico(dados, avatar), gerarEmbedPericias(dados), gerarEmbedInventario(dados), gerarEmbedHabilidades(dados)] });
+        default: return message.reply({ embeds: [gerarEmbedBasico(dados, avatar)] });
     }
 }
 
@@ -229,15 +308,37 @@ async function comandoMenu(message) {
     }
 
     if (opcao === 'p') {
-        const select = new StringSelectMenuBuilder().setCustomId('menu_rolar_pericia').setPlaceholder('Selecione para Rolar...');
-        let contador = 0;
-        for (const [nome, attr] of Object.entries(MAPA_TOTAL)) {
-            if (contador >= 25) break; 
-            let bonus = dados.atributos[attr] + (dados.periciasTreinadas.includes(nome) ? 3 : 0);
-            select.addOptions(new StringSelectMenuOptionBuilder().setLabel(nome).setDescription(`Total: ${fmt(bonus)}`).setValue(nome));
-            contador++;
+        // --- MUDANÇA: DIVISÃO EM DOIS MENUS PARA CABER TUDO ---
+        
+        // Menu 1: Físicas
+        const selectFisicas = new StringSelectMenuBuilder()
+            .setCustomId('menu_rolar_pericia_fisicas')
+            .setPlaceholder('💪 Perícias Físicas...');
+        
+        for (const [nome, attr] of Object.entries(PERICIAS_FISICAS)) {
+            const calculo = calcularPericia(dados, nome);
+            selectFisicas.addOptions(new StringSelectMenuOptionBuilder()
+                .setLabel(nome).setDescription(`Total: ${fmt(calculo.total)} | ${calculo.detalhes}`).setValue(nome));
         }
-        return message.reply({ content: '🤸 **Rolagem de Perícias:**', components: [new ActionRowBuilder().addComponents(select)] });
+
+        // Menu 2: Mentais
+        const selectMentais = new StringSelectMenuBuilder()
+            .setCustomId('menu_rolar_pericia_mentais')
+            .setPlaceholder('🧠 Perícias Mentais...');
+        
+        for (const [nome, attr] of Object.entries(PERICIAS_MENTAIS)) {
+            const calculo = calcularPericia(dados, nome);
+            selectMentais.addOptions(new StringSelectMenuOptionBuilder()
+                .setLabel(nome).setDescription(`Total: ${fmt(calculo.total)} | ${calculo.detalhes}`).setValue(nome));
+        }
+
+        return message.reply({ 
+            content: '🤸 **Selecione a Perícia para rolar:**', 
+            components: [
+                new ActionRowBuilder().addComponents(selectFisicas),
+                new ActionRowBuilder().addComponents(selectMentais)
+            ] 
+        });
     }
 }
 
@@ -245,11 +346,11 @@ async function comandoMenu(message) {
 async function interacaoFicha(interaction) {
     const userId = interaction.user.id;
     const chaveAtiva = `ficha_${userId}`;
-    const chaveBanco = `banco_fichas_${userId}`;
+    const chaveBanco = `banco_fichas_geral`; // Banco Público
 
     // A. ABRIR FORMULARIO ADD
     if (interaction.isButton() && interaction.customId === 'btn_abrir_form_add') {
-        const modal = new ModalBuilder().setCustomId('modal_add_ficha').setTitle('Novo Personagem (Banco)');
+        const modal = new ModalBuilder().setCustomId('modal_add_ficha').setTitle('Novo Personagem (Público)');
         modal.addComponents(
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('input_nome').setLabel("Nome").setStyle(TextInputStyle.Short).setRequired(true)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('input_raca').setLabel("Raça | Classe").setStyle(TextInputStyle.Short).setRequired(true)),
@@ -275,50 +376,49 @@ async function interacaoFicha(interaction) {
                 forca: parseInt(fisicos[0]) || 0, destreza: parseInt(fisicos[1]) || 0, constituicao: parseInt(fisicos[2]) || 0,
                 inteligencia: parseInt(mentais[0]) || 0, sabedoria: parseInt(mentais[1]) || 0, carisma: parseInt(mentais[2]) || 0
             },
-            periciasTreinadas: [], inventario: [], habilidades: []
+            periciasTreinadas: [], inventario: [], habilidades: [],
+            pontosPericia: {} 
         };
 
         await db.push(chaveBanco, novaFicha);
         await interaction.reply({ 
-            content: `✅ **${novaFicha.nome}** salvo!\nUse \`!ficha login\` para jogar com ele.`,
+            content: `✅ **${novaFicha.nome}** salvo no Banco Público!\nQualquer um pode usar \`!ficha login\` para jogar com ele.`,
             embeds: [gerarEmbedBasico(novaFicha, interaction.user.displayAvatarURL())] 
         });
     }
 
-    // C. PROCESSAR LOGIN (MENU)
+    // C. PROCESSAR LOGIN (Lê do Banco Público)
     if (interaction.isStringSelectMenu() && interaction.customId === 'menu_login_ficha') {
         const nomeAlvo = interaction.values[0];
         const banco = await db.get(chaveBanco) || [];
         const alvo = banco.find(f => f.nome === nomeAlvo);
 
         if (alvo) {
-            await sincronizarFicha(userId); // Salva o anterior
-            await db.set(chaveAtiva, alvo); // Define o novo
-            await interaction.reply(`✅ Login realizado! Personagem ativo: **${alvo.nome}**.`);
+            await sincronizarFicha(userId);
+            if (!alvo.pontosPericia) alvo.pontosPericia = {}; 
+            await db.set(chaveAtiva, alvo);
+            await interaction.reply(`✅ Login realizado! Jogando como: **${alvo.nome}**.`);
         } else {
             await interaction.reply("❌ Erro ao encontrar personagem.");
         }
     }
 
-    // D. PROCESSAR DELETE (MENU)
+    // D. PROCESSAR DELETE
     if (interaction.isStringSelectMenu() && interaction.customId === 'menu_del_ficha') {
         const nomeAlvo = interaction.values[0];
         let banco = await db.get(chaveBanco) || [];
         
-        // Remove do banco
         const novoBanco = banco.filter(f => f.nome !== nomeAlvo);
         await db.set(chaveBanco, novoBanco);
 
-        // Se era o ativo, desloga
         const ativa = await db.get(chaveAtiva);
         if (ativa && ativa.nome === nomeAlvo) {
             await db.delete(chaveAtiva);
         }
-
-        await interaction.reply(`🗑️ **${nomeAlvo}** foi deletado para sempre.`);
+        await interaction.reply(`🗑️ **${nomeAlvo}** foi deletado do Banco Público.`);
     }
 
-    // E. TREINAR / ROLAR (Mantidos igual)
+    // E. TREINAR / ROLAR
     if (interaction.isButton() && (interaction.customId === 'btn_treinar_fisicas' || interaction.customId === 'btn_treinar_mentais')) {
         const tipo = interaction.customId === 'btn_treinar_fisicas' ? PERICIAS_FISICAS : PERICIAS_MENTAIS;
         const select = new StringSelectMenuBuilder().setCustomId('select_treinar_salvar').setPlaceholder('Marque...').setMinValues(1).setMaxValues(Object.keys(tipo).length);
@@ -338,77 +438,48 @@ async function interacaoFicha(interaction) {
         const d20 = Math.floor(Math.random() * 20) + 1;
         await interaction.reply(`🎲 **${atributo.toUpperCase()}**: [${d20}] + ${valor} = **${d20 + valor}**`);
     }
-    if (interaction.isStringSelectMenu() && interaction.customId === 'menu_rolar_pericia') {
+
+    // ATUALIZADO: ROLAGEM DE PERÍCIA (Aceita os dois menus)
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('menu_rolar_pericia')) {
         const dados = await db.get(chaveAtiva);
-        const periciaNome = interaction.values[0];
-        const attr = MAPA_TOTAL[periciaNome];
-        let bonus = dados.atributos[attr] + (dados.periciasTreinadas.includes(periciaNome) ? 3 : 0);
+        const nome = interaction.values[0];
+        
+        const calculo = calcularPericia(dados, nome);
+        
         const d20 = Math.floor(Math.random() * 20) + 1;
-        await interaction.reply(`🎲 **${periciaNome}**: [${d20}] + ${bonus} = **${d20 + bonus}**`);
+        await interaction.reply(`🎲 **${nome}**: [${d20}] + ${calculo.total} = **${d20 + calculo.total}**\n*(Detalhes: ${calculo.detalhes})*`);
     }
 }
 
-// --- FUNÇÕES VISUAIS (DESIGN MELHORADO) ---
+// --- FUNÇÕES VISUAIS ---
 const fmt = (n) => n >= 0 ? `+${n}` : `${n}`;
 
-// Função para desenhar barrinhas (Ex: 🟥🟥🟥⬜⬜)
 function gerarBarra(atual, total, cor = 'red') {
     const totalBarras = 10;
-    // Garante que não divida por zero
     if (total <= 0) total = 1; 
-    
-    const porcentagem = Math.min(Math.max(atual / total, 0), 1);
-    const preenchidas = Math.round(totalBarras * porcentagem);
-    const vazias = totalBarras - preenchidas;
-
-    const charCheio = cor === 'red' ? '🟥' : '🟦'; // Vida vermelha, Mana azul
-    const charVazio = '⬛';
-
-    return `${charCheio.repeat(preenchidas)}${charVazio.repeat(vazias)}`;
+    const p = Math.min(Math.max(atual / total, 0), 1);
+    const preenchidas = Math.round(totalBarras * p);
+    return (cor==='red'?'🟥':'🟦').repeat(preenchidas) + '⬛'.repeat(totalBarras - preenchidas);
 }
 
 function gerarEmbedBasico(dados, avatarUrl = null) {
     const a = dados.atributos;
-    const hpBar = gerarBarra(dados.recursos.hpAtual, dados.recursos.hpTotal, 'red');
-    const mpBar = gerarBarra(dados.recursos.manaAtual, dados.recursos.manaTotal, 'blue');
-
     const embed = new EmbedBuilder()
         .setColor(0xFFD700)
         .setTitle(`📜 ${dados.nome}`)
-        // SUBTÍTULO LIMPO (Sem emojis, separado por |)
         .setDescription(`**${dados.racaClasse}** | Nível ${dados.nivel}`) 
         .addFields(
-            { 
-                name: `❤️ Vida [${dados.recursos.hpAtual}/${dados.recursos.hpTotal}]`, 
-                value: `${hpBar}`, 
-                inline: false 
-            },
-            { 
-                name: `✨ Mana [${dados.recursos.manaAtual}/${dados.recursos.manaTotal}]`, 
-                value: `${mpBar}`, 
-                inline: false 
-            },
-            { name: '\u200B', value: '\u200B', inline: false }, // Espaçador
-            { 
-                name: '⚔️ Físicos', 
-                value: `>>> **Força:** \`${fmt(a.forca)}\`\n**Destreza:** \`${fmt(a.destreza)}\`\n**Const.:** \`${fmt(a.constituicao)}\``, 
-                inline: true 
-            },
-            { 
-                name: '🔮 Mentais', 
-                value: `>>> **Intelig.:** \`${fmt(a.inteligencia)}\`\n**Sabedoria:** \`${fmt(a.sabedoria)}\`\n**Carisma:** \`${fmt(a.carisma)}\``, 
-                inline: true 
-            }
+            { name: `❤️ Vida [${dados.recursos.hpAtual}/${dados.recursos.hpTotal}]`, value: gerarBarra(dados.recursos.hpAtual, dados.recursos.hpTotal, 'red'), inline: false },
+            { name: `✨ Mana [${dados.recursos.manaAtual}/${dados.recursos.manaTotal}]`, value: gerarBarra(dados.recursos.manaAtual, dados.recursos.manaTotal, 'blue'), inline: false },
+            { name: '\u200B', value: '\u200B', inline: false },
+            { name: '⚔️ Físicos', value: `>>> **Força:** \`${fmt(a.forca)}\`\n**Destreza:** \`${fmt(a.destreza)}\`\n**Const.:** \`${fmt(a.constituicao)}\``, inline: true },
+            { name: '🔮 Mentais', value: `>>> **Intelig.:** \`${fmt(a.inteligencia)}\`\n**Sabedoria:** \`${fmt(a.sabedoria)}\`\n**Carisma:** \`${fmt(a.carisma)}\``, inline: true }
         )
         .setFooter({ text: 'Dica: Use !menu para rolar dados' });
 
-    // Se tiver avatar, usa ele. Se não, usa o pergaminho padrão.
-    if (avatarUrl) {
-        embed.setThumbnail(avatarUrl);
-    } else {
-        embed.setThumbnail('https://cdn-icons-png.flaticon.com/512/3408/3408506.png');
-    }
-
+    if (avatarUrl) embed.setThumbnail(avatarUrl); 
+    else embed.setThumbnail('https://cdn-icons-png.flaticon.com/512/3408/3408506.png');
+    
     return embed;
 }
 
@@ -416,19 +487,18 @@ function gerarEmbedPericias(dados) {
     let descFisicas = "";
     let descMentais = "";
     
+    if (!dados.pontosPericia) dados.pontosPericia = {};
+
     for (const [nome, attr] of Object.entries(MAPA_TOTAL)) {
-        let bonus = dados.atributos[attr]; 
+        const calculo = calcularPericia(dados, nome);
         let icone = "▫️"; 
         
-        // Verifica treino
-        if (dados.periciasTreinadas.includes(nome)) { 
-            bonus += 3; 
-            icone = "🔹"; 
-        }
+        if (dados.periciasTreinadas.includes(nome)) icone = "🔹";
+        if (dados.pontosPericia[nome] > 0) icone = "🔸";
+        if (dados.periciasTreinadas.includes(nome) && dados.pontosPericia[nome] > 0) icone = "🌟";
 
-        const linha = `${icone} **${nome}**: \`${fmt(bonus)}\`\n`;
+        const linha = `${icone} **${nome}**: \`${fmt(calculo.total)}\`\n`;
 
-        // Separa nas listas para ficar organizado
         if (Object.keys(PERICIAS_FISICAS).includes(nome)) {
             descFisicas += linha;
         } else {
@@ -437,8 +507,9 @@ function gerarEmbedPericias(dados) {
     }
 
     return new EmbedBuilder()
-        .setColor(0xFFA500) // Laranja
+        .setColor(0xFFA500)
         .setTitle(`🤸 Perícias de ${dados.nome}`)
+        .setDescription("Soma: Pontos + Atributo + Treinado")
         .addFields(
             { name: '💪 Físicas', value: descFisicas || "Nenhuma", inline: true },
             { name: '🧠 Mentais', value: descMentais || "Nenhuma", inline: true }
@@ -459,16 +530,30 @@ function gerarEmbedInventario(dados) {
 }
 
 function gerarEmbedHabilidades(dados) {
-    let desc = "Nenhuma habilidade aprendida."; 
-    if (Array.isArray(dados.habilidades) && dados.habilidades.length > 0) { 
-        desc = dados.habilidades.map(h => {
-            let info = `✨ **${h.nome}**`;
-            if (h.custo) info += ` | Custo: \`${h.custo}\``;
-            if (h.desc) info += `\n> *${h.desc}*`;
-            return info;
-        }).join('\n\n'); 
+    if (!Array.isArray(dados.habilidades) || dados.habilidades.length === 0) {
+        return new EmbedBuilder().setColor(0x9B59B6).setTitle(`Habilidades de ${dados.nome}`).setDescription("Nenhuma habilidade, magia ou defeito.");
     }
-    return new EmbedBuilder().setColor(0x9B59B6).setTitle(`📜 Habilidades de ${dados.nome}`).setDescription(desc);
+
+    const habilidades = dados.habilidades.filter(h => !h.tipo || h.tipo === 'Habilidade');
+    const magias = dados.habilidades.filter(h => h.tipo === 'Magia');
+    const defeitos = dados.habilidades.filter(h => h.tipo === 'Defeito');
+
+    const embed = new EmbedBuilder().setColor(0x9B59B6).setTitle(`📚 Habilidades de ${dados.nome}`);
+
+    const formatarLista = (lista, emoji) => {
+        return lista.map(h => {
+            let texto = `${emoji} **${h.nome}**`;
+            if (h.custo) texto += ` | Custo: \`${h.custo}\``;
+            if (h.desc) texto += `\n> *${h.desc}*`;
+            return texto;
+        }).join('\n\n');
+    };
+
+    if (habilidades.length > 0) embed.addFields({ name: '⚔️ Habilidades', value: formatarLista(habilidades, '⚔️') });
+    if (magias.length > 0) embed.addFields({ name: '🔮 Magias', value: formatarLista(magias, '🔮') });
+    if (defeitos.length > 0) embed.addFields({ name: '🩸 Defeitos', value: formatarLista(defeitos, '⚠️') });
+
+    return embed;
 }
 
 module.exports = { comandoFicha, comandoMenu, interacaoFicha };

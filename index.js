@@ -3,6 +3,7 @@ const { Client, GatewayIntentBits, Events, ActivityType } = require('discord.js'
 const { QuickDB } = require("quick.db");
 const { interpretarRolagem } = require('./utils/dados');
 const { comandoIniciativa, comandoTurno } = require('./commands/turno');
+const { comandoAdmin } = require('./commands/admin');
 
 // Importa os comandos
 const { comandoFicha, comandoMenu, interacaoFicha } = require('./commands/ficha');
@@ -57,6 +58,12 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (message.content.startsWith('!turno')) {
         await comandoTurno(message);
+    }
+    // ... (dentro do client.on messageCreate)
+
+    // COMANDO DE ADMIN (!admin)
+    if (message.content.startsWith('!admin')) {
+        await comandoAdmin(message);
     }
 });
 
